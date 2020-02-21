@@ -4,47 +4,72 @@
 # 
 # This script will work for enrollment files from 2007-08 school year and later
 #
-# This script imports enrollment data files from individual school years and combines them into a single data frame
+# This script imports enrollment data files from individual school years and combines them into a tidy data set
+
+#Clear console
+cat("\014") 
+
+#Clear memory
+rm(list=ls())
+gc()
 
 # Install/load packages
 if (!require("pacman")) install.packages("pacman")
-pacman::p_load(tidyverse, tidyr, dplyr)
+pacman::p_load(tidyverse, tidyr, dplyr, zip)
 
-# Set working directory
-setwd("C:/Github/SimilarSchoolComparison/Data/Enrollment")
+# Create vector with school years for looping 
+v_schoolyears <- c("2007-08", "2008-09", "2009-10", "2010-11", "2011-12", 
+                   "2012-13", "2013-14", "2016-17", "2017-18", "2018-19")
+
+# Urls
+v_url_begin <- "http://dq.cde.ca.gov/dataquest/dlfile/dlfile.aspx?cLevel=School&cYear="
+v_url_end <- "&cCat=Enrollment&cPage=filesenr.asp"
+
+# Download data files
+for (i in 1:length(v_schoolyears)) {
+  
+  download.file(url = paste0(v_url_begin, v_schoolyears[i], v_url_end),
+                destfile = paste0("enrollment_", v_schoolyears[i], ".txt"))
+  
+}
 
 # Create list to store data frames
 l_dataframes <- list()
 
-# List of files in the working folder
-l_files <- dir()
-
 # Import each file into a data frame
-for (i in 1:length(l_files)) {
+for (i in 1:length(v_schoolyears)) {
   
-  l_dataframes[[i]] <- l_files[i] %>%
+  l_dataframes[[i]] <- paste0("enrollment_", v_schoolyears[i],".txt") %>%
     
                           # Import file
                           read.csv(header = TRUE
                                    , sep = "\t"
-                                   , colClasses = c(rep("character", 6)
-                                                    , rep("integer", 17))) %>%
+                                   , colClasses = c(rep("character", 6) # first 6 columns are text
+                                                    , rep("integer", 17))) %>% # next 17 columns are numeric
                           
-                          # Parse school year from file name
-                          mutate(FILE_NAME = l_files[i])
+                          # Add school year column
+                          mutate(SCHOOL_YEAR = v_schoolyears[i])
 }
 
-# Create single data frame
-df_enr <- bind_rows(l_dataframes)
-
-# Clean up
-rm(i, l_dataframes, l_files)
+# Delete stored files
+for (i in 1:length(v_schoolyears)) {
+  
+  file.remove(paste0("enrollment_", v_schoolyears[i], ".txt"))
+  
+}
 gc()
 
+# Create single data frame
+df_enrollment <- bind_rows(l_dataframes)
 
-df_enr_long <- df_enr %>%
+# Clean up
+rm(i, l_dataframes)
+gc()
+
+# Pivot to long, tidy format
+df_enrollment_long <- df_enrollment %>%
   
-  pivot_longer(KDGN:ADULT, names_to = "GRADE_SPAN", values_to = "COUNT") %>%
+  pivot_longer(KDGN:ADULT, names_to = "GRADE_LEVEL", values_to = "COUNT") %>%
   
   # Add ethnic text variable
   mutate(ETHNIC_TXT = case_when(
@@ -56,14 +81,27 @@ df_enr_long <- df_enr %>%
       , ETHNIC == "5" ~ "Hispanic or Latino"
       , ETHNIC == "6" ~ "African American"
       , ETHNIC == "7" ~ "White"
-      , ETHNIC == "9" ~ "Two or More Races"),
-    
-    School_Year_2digit = as.numeric(substring(FILE_NAME, 4, 5)),
-    
-    SCHOOL_YEAR = paste0(School_Year_2digit,
-                         "-",
-                         School_Year_2digit + 1)) %>%
+      , ETHNIC == "9" ~ "Two or More Races")) %>%
   
-  # Drop file name
-  dplyr::select(-FILE_NAME, -School_Year_2digit)
-  
+  # Reorder columns
+  select(CDS_CODE:SCHOOL,
+         SCHOOL_YEAR,
+         ETHNIC,
+         ETHNIC_TXT,
+         GENDER,
+         GRADE_LEVEL,
+         COUNT)
+
+# Export in RDS format
+saveRDS(df_enrollment_long, "enrollment_by_school.rds")
+
+# Export CSV
+data.table::fwrite(df_enrollment_long,
+                   file = "enrollment_by_school.csv",
+                   row.names = FALSE)
+# Compress CSV
+zip(zipfile = "enrollment_by_school.zip",
+    files = "enrollment_by_school.csv")
+
+# Delete CSV file
+file.remove("enrollment_by_school.csv")
